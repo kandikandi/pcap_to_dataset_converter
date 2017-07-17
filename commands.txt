@@ -1,0 +1,3 @@
+setenv LD_LIBRARY_PATH
+setenv LD_LIBRARY_PATH ${LD_LIBRARY_PATH}:"$PWD/nDPI-dev/lib"
+gcc -InDPI-dev/src/include pcap_to_flows.c -lndpi -LnDPI-dev/lib -o pcap_to_flows -lpcap
