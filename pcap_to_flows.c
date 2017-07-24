@@ -34,12 +34,17 @@ static u_int64_t flow_counter_01 = 0;
 static u_int64_t protocol_counter[NDPI_MAX_SUPPORTED_PROTOCOLS + NDPI_MAX_NUM_CUSTOM_PROTOCOLS + 1];
 static u_int64_t protocol_counter_bytes[NDPI_MAX_SUPPORTED_PROTOCOLS + NDPI_MAX_NUM_CUSTOM_PROTOCOLS + 1];
 static u_int32_t protocol_flows[NDPI_MAX_SUPPORTED_PROTOCOLS + NDPI_MAX_NUM_CUSTOM_PROTOCOLS + 1] = { 0 };
+static int num_apps = 0;
 
 static FILE *flow_info_file;
 static char *flow_info_file_name;
 
 static char labels[NDPI_MAX_SUPPORTED_PROTOCOLS + NDPI_MAX_NUM_CUSTOM_PROTOCOLS + 1][32];
 
+static int del_unknown_flag = 0;
+static int app_proto_only_flag = 0;
+
+static int min_number_objects = 30;
 
 #define	MAX_NDPI_FLOWS     20000000
 #define IA_MAX             10000000
@@ -329,14 +334,17 @@ static unsigned int packet_processing(const u_int64_t time, const struct pcap_pk
 
     if(protocol==0){
         detected = ndpi_guess_undetected_protocol(ndpi_struct, flow->protocol, ntohl(flow->lower_ip), ntohs(flow->lower_port), ntohl(flow->upper_ip), ntohs(flow->upper_port));
-        protocol = detected.app_protocol;   
+        if(detected.app_protocol!=detected.master_protocol){        
+            protocol = detected.app_protocol;
+        }          
     }
 
     flow->detected_protocol = protocol;
+    
 
-    if((flow->detected_protocol != NDPI_PROTOCOL_UNKNOWN) || (iph->protocol == IPPROTO_UDP) || ((iph->protocol == IPPROTO_TCP) && (flow->packets > 10))) {
+    if((flow->detected_protocol != NDPI_PROTOCOL_UNKNOWN) || (iph->protocol == IPPROTO_UDP) || ((iph->protocol == IPPROTO_TCP) && (flow->packets > 100))) {
         flow->detection_completed = 1;
-        free_ndpi_flow(flow);
+        free_ndpi_flow(flow);        
     }
 
   return 0;
@@ -369,8 +377,17 @@ static void pcap_packet_callback(u_char * args, const struct pcap_pkthdr *header
   
 }
 
+static int valid_label(char *app_name){
+    for(int i=0; i < num_apps; i++){
+        if(strcmp(labels[i], app_name) == 0) {
+            return 1;
+        }            
+    }
+    return 0;
+}
+
 static void printFlow(struct ndpi_flow *flow, FILE *file) {
-    if (flow->packets < 2) { return; }
+    if (flow->packets < 2 || flow->detected_protocol==0 || valid_label(ndpi_get_proto_name(ndpi_struct, flow->detected_protocol)) == 0) { return; }
     double last_time = (flow->last_packet_time_sec) * detection_tick_resolution + flow->last_packet_time_usec / (1000000 / detection_tick_resolution);
     double first_time = (flow->first_packet_time_sec) * detection_tick_resolution + flow->first_packet_time_usec / (1000000 / detection_tick_resolution);
     double duration = last_time - first_time;   
@@ -405,10 +422,10 @@ static void printFlow(struct ndpi_flow *flow, FILE *file) {
 static void printResults(void) {
     
     ndpi_twalk(ndpi_flows_root, node_proto_guess_walker, NULL);
-    int app_num = get_num_applications();
+    num_apps = get_num_applications();
     flow_info_file = fopen(flow_info_file_name, "wb");
-    fprintf(flow_info_file, "%i 13 %i\n", valid_flow_count, app_num);    
-    for(int i=0; i < app_num; i++){
+    fprintf(flow_info_file, "%i 13 %i\n", valid_flow_count, num_apps);    
+    for(int i=0; i < num_apps; i++){
         fprintf(flow_info_file,"%s ",labels[i]);
     }    
     fprintf(flow_info_file,"\n");
@@ -434,11 +451,11 @@ static void node_output_flow_info_walker(const void *node, ndpi_VISIT which, int
 static void node_proto_guess_walker(const void *node, ndpi_VISIT which, int depth, void *user_data) {
     struct ndpi_flow *flow = *(struct ndpi_flow**)node;
     if((which == preorder) || (which == leaf)) { /* Avoid walking the same node multiple times */
-        if (flow->packets > 1) {
+        if (flow->packets > 1 && flow->detected_protocol!=0) {
             protocol_counter[flow->detected_protocol]       += flow->packets;
             protocol_counter_bytes[flow->detected_protocol] += flow->bytes;
             protocol_flows[flow->detected_protocol]++;    
-            valid_flow_count++;
+           // valid_flow_count++;
         }
     }    
 }
@@ -447,8 +464,9 @@ int get_num_applications(){
     int num_apps = 0;  
     int label_i = 0;  
     for(int i=0; i < NDPI_MAX_SUPPORTED_PROTOCOLS + NDPI_MAX_NUM_CUSTOM_PROTOCOLS; i++){
-        if(protocol_flows[i] > 0) {
+        if(protocol_flows[i] >= min_number_objects) {
             num_apps++;
+            valid_flow_count+=protocol_flows[i];
             strcpy(labels[label_i] ,ndpi_get_proto_name(ndpi_struct, i));
             label_i++;            
         }
@@ -462,11 +480,16 @@ int main(int argc, char *argv[]) {
         printf("Please provide a tcpdump file and output file name\n");
         return(-1);
     }
-    
+
+    if(argc == 4){
+        min_number_objects = argv[3];
+    }        
+
+   
     pcap_t *handle; //store the "device" (from tcpdump)
-    
+
     handle = pcap_open_offline(argv[1],NULL);
-    
+
     if(handle==NULL){
        printf("Couldn't open the file %s\n", argv[1]);
        return(-1);
