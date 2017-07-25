@@ -387,7 +387,7 @@ static int valid_label(char *app_name){
 }
 
 static void printFlow(struct ndpi_flow *flow, FILE *file) {
-    if (flow->packets < 2 || flow->detected_protocol==0 || valid_label(ndpi_get_proto_name(ndpi_struct, flow->detected_protocol)) == 0) { return; }
+    if (flow->packets < 2 || valid_label(ndpi_get_proto_name(ndpi_struct, flow->detected_protocol)) == 0 ) { return; }
     double last_time = (flow->last_packet_time_sec) * detection_tick_resolution + flow->last_packet_time_usec / (1000000 / detection_tick_resolution);
     double first_time = (flow->first_packet_time_sec) * detection_tick_resolution + flow->first_packet_time_usec / (1000000 / detection_tick_resolution);
     double duration = last_time - first_time;   
@@ -451,11 +451,11 @@ static void node_output_flow_info_walker(const void *node, ndpi_VISIT which, int
 static void node_proto_guess_walker(const void *node, ndpi_VISIT which, int depth, void *user_data) {
     struct ndpi_flow *flow = *(struct ndpi_flow**)node;
     if((which == preorder) || (which == leaf)) { /* Avoid walking the same node multiple times */
-        if (flow->packets > 1 && flow->detected_protocol!=0) {
+        if (flow->packets > 1 ) {
             protocol_counter[flow->detected_protocol]       += flow->packets;
             protocol_counter_bytes[flow->detected_protocol] += flow->bytes;
             protocol_flows[flow->detected_protocol]++;    
-           // valid_flow_count++;
+            //valid_flow_count++;
         }
     }    
 }
@@ -482,7 +482,7 @@ int main(int argc, char *argv[]) {
     }
 
     if(argc == 4){
-        min_number_objects = argv[3];
+        min_number_objects = *argv[3];
     }        
 
    
