@@ -15,6 +15,7 @@ static void setupDetection(void);
 static void node_output_flow_info_walker(const void *node, ndpi_VISIT which, int depth, void *user_data);
 static void node_proto_guess_walker(const void *node, ndpi_VISIT which, int depth, void *user_data); 
 int get_num_applications();
+const char *ntos(uint32_t ip);
 
 int print_on = 0;
 
@@ -196,6 +197,8 @@ static struct ndpi_flow *get_ndpi_flow(const struct pcap_pkthdr *header, const s
     flow.upper_port = upper_port;
     flow.first_packet_time_sec = header->ts.tv_sec;
     flow.first_packet_time_usec = header->ts.tv_usec;
+
+  
 
     ret = ndpi_tfind(&flow, (void*)&ndpi_flows_root, node_cmp);
 
@@ -386,19 +389,37 @@ static int valid_label(char *app_name){
     return 0;
 }
 
+
+const char *ntos(uint32_t ip)
+{   
+    char *str=(char*)malloc(17);
+
+    unsigned char ip_str[4];
+    ip_str[0] = ip & 0xFF;
+    ip_str[1] = (ip >> 8) & 0xFF;
+    ip_str[2] = (ip >> 16) & 0xFF;
+    ip_str[3] = (ip >> 24) & 0xFF;
+
+    snprintf(str, 16, "%d.%d.%d.%d",
+                 ip_str[0], ip_str[1], ip_str[2], ip_str[3]);
+
+    return str; 
+}
+
 static void printFlow(struct ndpi_flow *flow, FILE *file) {
     if (flow->packets < 2 || valid_label(ndpi_get_proto_name(ndpi_struct, flow->detected_protocol)) == 0 ) { return; }
     double last_time = (flow->last_packet_time_sec) * detection_tick_resolution + flow->last_packet_time_usec / (1000000 / detection_tick_resolution);
     double first_time = (flow->first_packet_time_sec) * detection_tick_resolution + flow->first_packet_time_usec / (1000000 / detection_tick_resolution);
-    double duration = last_time - first_time;   
-    struct in_addr low, high;
-    low.s_addr = flow->lower_ip;
-    high.s_addr = flow->upper_ip;
+    double duration = last_time - first_time; 
+
+    const char* lower = ntos(flow->lower_ip);  
+    const char* upper = ntos(flow->upper_ip);  
+    
    
     fprintf(file, "%s %u %s %u %s\n%.6f %.6f %.6f %u %u %.6f %.6f %.6f %u %u %u %.6f %.6f %s\n",
-        inet_ntoa(low),
+        lower,
         ntohs(flow->lower_port),
-        inet_ntoa(high),
+        upper,
         ntohs(flow->upper_port),
         ipProto2Name(flow->protocol),
         first_time,
@@ -508,20 +529,4 @@ int main(int argc, char *argv[]) {
 
 return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
