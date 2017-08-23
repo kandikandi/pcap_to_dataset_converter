@@ -61,10 +61,10 @@ static u_int32_t size_id_struct = 0;
 
 // flow tracking
 typedef struct ndpi_flow {
-    u_int32_t lower_ip;
-    u_int32_t upper_ip;
-    u_int16_t lower_port;
-    u_int16_t upper_port;
+    u_int32_t src_ip;
+    u_int32_t dst_ip;
+    u_int16_t src_port;
+    u_int16_t dst_port;
     u_int32_t first_packet_time_sec;
     u_int32_t first_packet_time_usec;
     u_int8_t detection_completed, protocol;
@@ -125,10 +125,10 @@ static int node_cmp(const void *a, const void *b) {
     struct ndpi_flow *fa = (struct ndpi_flow*)a;
     struct ndpi_flow *fb = (struct ndpi_flow*)b;
 
-    if(fa->lower_ip < fb->lower_ip) return(-1); else { if(fa->lower_ip > fb->lower_ip) return(1); }
-    if(fa->lower_port < fb->lower_port) return(-1); else { if(fa->lower_port > fb->lower_port) return(1); }
-    if(fa->upper_ip < fb->upper_ip) return(-1); else { if(fa->upper_ip > fb->upper_ip) return(1); }
-    if(fa->upper_port < fb->upper_port) return(-1); else { if(fa->upper_port > fb->upper_port) return(1); }
+    if(fa->src_ip < fb->src_ip) return(-1); else { if(fa->src_ip > fb->src_ip) return(1); }
+    if(fa->src_port < fb->src_port) return(-1); else { if(fa->src_port > fb->src_port) return(1); }
+    if(fa->dst_ip < fb->dst_ip) return(-1); else { if(fa->dst_ip > fb->dst_ip) return(1); }
+    if(fa->dst_port < fb->dst_port) return(-1); else { if(fa->dst_port > fb->dst_port) return(1); }
     if(fa->protocol < fb->protocol) return(-1); else { if(fa->protocol > fb->protocol) return(1); }
 
   return(0);
@@ -139,10 +139,10 @@ static struct ndpi_flow *get_ndpi_flow(const struct pcap_pkthdr *header, const s
     u_int16_t l4_packet_len;
     struct ndpi_tcphdr *tcph = NULL;
     struct ndpi_udphdr *udph = NULL;
-    u_int32_t lower_ip;
-    u_int32_t upper_ip;
-    u_int16_t lower_port;
-    u_int16_t upper_port;
+    u_int32_t src_ip;
+    u_int32_t dst_ip;
+    u_int16_t src_port;
+    u_int16_t dst_port;
     struct ndpi_flow flow;
     void *ret;
 
@@ -156,45 +156,32 @@ static struct ndpi_flow *get_ndpi_flow(const struct pcap_pkthdr *header, const s
 
     l4_packet_len = ntohs(iph->tot_len) - (iph->ihl * 4);
 
-    if (iph->saddr < iph->daddr) {
-        lower_ip = iph->saddr;
-        upper_ip = iph->daddr;
-    } else {
-        lower_ip = iph->daddr;
-        upper_ip = iph->saddr;
-    }
-
+    src_ip = iph->saddr;
+    dst_ip = iph->daddr;
+   
     if (iph->protocol == 6 && l4_packet_len >= 20) {
         // tcp
         tcph = (struct ndpi_tcphdr *) ((u_int8_t *) iph + iph->ihl * 4);
-        if (iph->saddr < iph->daddr) {
-            lower_port = tcph->source;
-            upper_port = tcph->dest;
-        } else {
-            lower_port = tcph->dest;
-            upper_port = tcph->source;
-        }
+        src_port = tcph->source;
+        dst_port = tcph->dest;
+       
     } else if (iph->protocol == 17 && l4_packet_len >= 8) {
         // udp
         udph = (struct ndpi_udphdr *) ((u_int8_t *) iph + iph->ihl * 4);
-        if (iph->saddr < iph->daddr) {
-            lower_port = udph->source;
-            upper_port = udph->dest;
-        } else {
-            lower_port = udph->dest;
-            upper_port = udph->source;
-        }
+        src_port = udph->source;
+        dst_port = udph->dest;
+       
     } else {
         // non tcp/udp protocols
-        lower_port = 0;
-        upper_port = 0;
+        src_port = 0;
+        dst_port = 0;
     }
 
     flow.protocol = iph->protocol;
-    flow.lower_ip = lower_ip;
-    flow.upper_ip = upper_ip;
-    flow.lower_port = lower_port;
-    flow.upper_port = upper_port;
+    flow.src_ip = src_ip;
+    flow.dst_ip = dst_ip;
+    flow.src_port = src_port;
+    flow.dst_port = dst_port;
     flow.first_packet_time_sec = header->ts.tv_sec;
     flow.first_packet_time_usec = header->ts.tv_usec;
 
@@ -216,8 +203,8 @@ static struct ndpi_flow *get_ndpi_flow(const struct pcap_pkthdr *header, const s
 
             memset(newflow, 0, sizeof(struct ndpi_flow));
             newflow->protocol = iph->protocol;
-            newflow->lower_ip = lower_ip, newflow->upper_ip = upper_ip;
-            newflow->lower_port = lower_port, newflow->upper_port = upper_port;
+            newflow->src_ip = src_ip, newflow->dst_ip = dst_ip;
+            newflow->src_port = src_port, newflow->dst_port = dst_port;
             newflow->first_packet_time_sec = header->ts.tv_sec;
             newflow->first_packet_time_usec = header->ts.tv_usec;
             newflow->last_packet_time_sec = header->ts.tv_sec;
@@ -336,7 +323,7 @@ static unsigned int packet_processing(const u_int64_t time, const struct pcap_pk
     protocol = detected.app_protocol;
 
     if(protocol==0){
-        detected = ndpi_guess_undetected_protocol(ndpi_struct, flow->protocol, ntohl(flow->lower_ip), ntohs(flow->lower_port), ntohl(flow->upper_ip), ntohs(flow->upper_port));
+        detected = ndpi_guess_undetected_protocol(ndpi_struct, flow->protocol, ntohl(flow->src_ip), ntohs(flow->src_port), ntohl(flow->dst_ip), ntohs(flow->dst_port));
         if(detected.app_protocol!=detected.master_protocol){        
             protocol = detected.app_protocol;
         }          
@@ -412,15 +399,15 @@ static void printFlow(struct ndpi_flow *flow, FILE *file) {
     double first_time = (flow->first_packet_time_sec) * detection_tick_resolution + flow->first_packet_time_usec / (1000000 / detection_tick_resolution);
     double duration = last_time - first_time; 
 
-    const char* lower = ntos(flow->lower_ip);  
-    const char* upper = ntos(flow->upper_ip);  
+    const char* src = ntos(flow->src_ip);  
+    const char* dst = ntos(flow->dst_ip);  
     
    
-    fprintf(file, "%s %u %s %u %s\n%.6f %.6f %.6f %u %u %.6f %.6f %.6f %u %u %u %.6f %.6f %s\n",
-        lower,
-        ntohs(flow->lower_port),
-        upper,
-        ntohs(flow->upper_port),
+    fprintf(file, "%s,%u,%s,%u,%s,%.6f,%.6f,%.6f,%u,%u,%.6f,%.6f,%.6f,%u,%u,%u,%.6f,%.6f,%s\n",
+        src,
+        ntohs(flow->src_port),
+        dst,
+        ntohs(flow->dst_port),
         ipProto2Name(flow->protocol),
         first_time,
         last_time,
@@ -445,13 +432,13 @@ static void printResults(void) {
     ndpi_twalk(ndpi_flows_root, node_proto_guess_walker, NULL);
     num_apps = get_num_applications();
     flow_info_file = fopen(flow_info_file_name, "wb");
-    fprintf(flow_info_file, "%i 13 %i\n", valid_flow_count, num_apps);    
+    fprintf(flow_info_file, "%i,13,%i\n", valid_flow_count, num_apps);    
     for(int i=0; i < num_apps; i++){
-        fprintf(flow_info_file,"%s ",labels[i]);
+        fprintf(flow_info_file,"%s,",labels[i]);
     }    
     fprintf(flow_info_file,"\n");
 
-    fputs("source_ip source_port dest_ip dest_port IP4_proto\nf_start f_end f_dur delta_bytes delta_packets avg_ia min_ia max_ia avg_len min_len max_len pkt_vel byte_vel application\n", flow_info_file);
+    fputs("source_ip,source_port,dest_ip,dest_port,IP4_proto,f_start,f_end,f_dur,delta_bytes,delta_packets,avg_ia,min_ia,max_ia,avg_len,min_len,max_len,pkt_vel,byte_vel,application\n", flow_info_file);
     ndpi_twalk(ndpi_flows_root, node_output_flow_info_walker, NULL);
     fclose(flow_info_file);
     
