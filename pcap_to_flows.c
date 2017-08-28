@@ -449,7 +449,7 @@ static void printResults(void) {
     ndpi_twalk(ndpi_flows_root, node_proto_guess_walker, NULL);
     num_apps = get_num_applications();
     flow_info_file = fopen(flow_info_file_name, "wb");
-    fprintf(flow_info_file, "%i,13,%i\n", valid_flow_count, num_apps);    
+    fprintf(flow_info_file, "%i,10,%i\n", valid_flow_count, num_apps);    
     for(int i=0; i < num_apps; i++){
         fprintf(flow_info_file,"%s,",labels[i]);
     }    
