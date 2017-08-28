@@ -16,6 +16,7 @@ static void node_output_flow_info_walker(const void *node, ndpi_VISIT which, int
 static void node_proto_guess_walker(const void *node, ndpi_VISIT which, int depth, void *user_data); 
 int get_num_applications();
 const char *ntos(uint32_t ip);
+static int get_app_number(char* label);
 
 int print_on = 0;
 
@@ -46,6 +47,8 @@ static int del_unknown_flag = 0;
 static int app_proto_only_flag = 0;
 
 static int min_number_objects = 30;
+
+static int n_packets = 10;
 
 #define	MAX_NDPI_FLOWS     20000000
 #define IA_MAX             10000000
@@ -214,7 +217,9 @@ static struct ndpi_flow *get_ndpi_flow(const struct pcap_pkthdr *header, const s
             newflow->max_ia_time = 0;
             newflow->min_pkt_len = header->len;
             newflow->max_pkt_len = header->len;
-            newflow->first_packet = 1;          
+            newflow->first_packet = 1; 
+            newflow->packets = 0;
+            newflow->bytes = 0;         
 
             ndpi_tsearch(newflow, (void*)&ndpi_flows_root, node_cmp); /* Add */
 
@@ -281,7 +286,7 @@ static double get_inter_arrival_time(u_int32_t last_packet_time_sec, u_int32_t l
 }
 
 static unsigned int packet_processing(const u_int64_t time, const struct pcap_pkthdr *header, const struct ndpi_iphdr *iph, u_int16_t ipsize, u_int16_t rawsize) {
-
+    //printf("packet_processing1\n");
     struct ndpi_id_struct *src, *dst;
     struct ndpi_flow *flow;
     struct ndpi_flow_struct *ndpi_flow = NULL;
@@ -290,51 +295,54 @@ static unsigned int packet_processing(const u_int64_t time, const struct pcap_pk
     double ia_time;
 
     flow = get_ndpi_flow(header, iph, ipsize);
-    if (flow != NULL) {
-
-        ndpi_flow = flow->ndpi_flow;
-        flow->packets++, flow->bytes += rawsize;
-        src = flow->src_id, dst = flow->dst_id;
-        ia_time = get_inter_arrival_time(flow->last_packet_time_sec, flow->last_packet_time_usec, header->ts.tv_sec, header->ts.tv_usec);
-        flow->d_ia_time+=ia_time;
-        
-        if(flow->first_packet != 1) {
-            if(ia_time < flow->min_ia_time){ flow->min_ia_time = ia_time; }
-            if(ia_time > flow->max_ia_time){ flow->max_ia_time = ia_time; }
-        }
-        flow->first_packet = 0;
-        
-        if(header->len < flow->min_pkt_len){flow->min_pkt_len = header->len;}
-        if(header->len > flow->max_pkt_len){flow->max_pkt_len = header->len;}
-        
-        flow->last_packet_time_sec = header->ts.tv_sec;
-        flow->last_packet_time_usec = header->ts.tv_usec;
-        
+    if (flow != NULL){
+        if(flow->packets < 10) {      
+    
+            ndpi_flow = flow->ndpi_flow;
+            flow->packets++, flow->bytes += rawsize;
+            src = flow->src_id, dst = flow->dst_id;
+            ia_time = get_inter_arrival_time(flow->last_packet_time_sec, flow->last_packet_time_usec, header->ts.tv_sec, header->ts.tv_usec);
+            flow->d_ia_time+=ia_time;
+            
+            if(flow->first_packet != 1 ) {
+                if(ia_time < flow->min_ia_time){ flow->min_ia_time = ia_time; }
+                if(ia_time > flow->max_ia_time){ flow->max_ia_time = ia_time; }
+            }
+            flow->first_packet = 0;
+            
+            if(rawsize < flow->min_pkt_len){flow->min_pkt_len = rawsize;}
+            if(rawsize > flow->max_pkt_len){flow->max_pkt_len = rawsize;}
+            
+            flow->last_packet_time_sec = header->ts.tv_sec;
+            flow->last_packet_time_usec = header->ts.tv_usec;           
+        }        
     } else {
         return 0;
     }
-
+  
     ip_packet_count++;
     total_bytes += rawsize;
 
+    if(flow->detection_completed != 1){
+        // here the actual detection is performed
+        ndpi_protocol detected = ndpi_detection_process_packet(ndpi_struct, ndpi_flow, (uint8_t *) iph, ipsize, time, src, dst);
+        protocol = detected.app_protocol;
 
-    // here the actual detection is performed
-    ndpi_protocol detected = ndpi_detection_process_packet(ndpi_struct, ndpi_flow, (uint8_t *) iph, ipsize, time, src, dst);
-    protocol = detected.app_protocol;
+        if(protocol==0){
+            detected = ndpi_guess_undetected_protocol(ndpi_struct, flow->protocol, ntohl(flow->src_ip), ntohs(flow->src_port), ntohl(flow->dst_ip), ntohs(flow->dst_port));
+            if(detected.app_protocol!=detected.master_protocol){        
+                protocol = detected.app_protocol;
+            }          
+        }
 
-    if(protocol==0){
-        detected = ndpi_guess_undetected_protocol(ndpi_struct, flow->protocol, ntohl(flow->src_ip), ntohs(flow->src_port), ntohl(flow->dst_ip), ntohs(flow->dst_port));
-        if(detected.app_protocol!=detected.master_protocol){        
-            protocol = detected.app_protocol;
-        }          
-    }
-
-    flow->detected_protocol = protocol;
+        flow->detected_protocol = protocol;
     
 
-    if((flow->detected_protocol != NDPI_PROTOCOL_UNKNOWN) || (iph->protocol == IPPROTO_UDP) || ((iph->protocol == IPPROTO_TCP) && (flow->packets > 100))) {
-        flow->detection_completed = 1;
-        free_ndpi_flow(flow);        
+        if (flow->detected_protocol != NDPI_PROTOCOL_UNKNOWN) {
+            flow->detection_completed = 1;
+            free_ndpi_flow(flow);        
+        }
+        //printf("packet_processing3\n");
     }
 
   return 0;
@@ -342,7 +350,7 @@ static unsigned int packet_processing(const u_int64_t time, const struct pcap_pk
 
 // executed for each packet in the pcap file
 static void pcap_packet_callback(u_char * args, const struct pcap_pkthdr *header, const u_char * packet) {
-  
+    //printf("pcap_packet_callback\n");
     const struct ndpi_ethhdr *ethernet = (struct ndpi_ethhdr *) packet;
     struct ndpi_iphdr *iph = (struct ndpi_iphdr *) &packet[sizeof(struct ndpi_ethhdr)];
     u_int64_t time;
@@ -376,6 +384,14 @@ static int valid_label(char *app_name){
     return 0;
 }
 
+static int get_app_number(char* label){
+    for(int i=0; i < num_apps; i++){
+        if(strcmp(labels[i], label) == 0) {
+            return i;
+        }            
+    }
+    return 0;
+}
 
 const char *ntos(uint32_t ip)
 {   
@@ -394,35 +410,36 @@ const char *ntos(uint32_t ip)
 }
 
 static void printFlow(struct ndpi_flow *flow, FILE *file) {
-    if (flow->packets < 2 || valid_label(ndpi_get_proto_name(ndpi_struct, flow->detected_protocol)) == 0 ) { return; }
+    //printf("packets in flow = %u and n is %u packets\n",flow->packets, n_packets);
+    if (flow->packets < n_packets || valid_label(ndpi_get_proto_name(ndpi_struct, flow->detected_protocol)) == 0 ) { return; }
     double last_time = (flow->last_packet_time_sec) * detection_tick_resolution + flow->last_packet_time_usec / (1000000 / detection_tick_resolution);
     double first_time = (flow->first_packet_time_sec) * detection_tick_resolution + flow->first_packet_time_usec / (1000000 / detection_tick_resolution);
     double duration = last_time - first_time; 
 
     const char* src = ntos(flow->src_ip);  
-    const char* dst = ntos(flow->dst_ip);  
+    const char* dst = ntos(flow->dst_ip); 
+    char* app_name = ndpi_get_proto_name(ndpi_struct, flow->detected_protocol); 
+    int app_num = get_app_number(app_name);
     
    
-    fprintf(file, "%s,%u,%s,%u,%s,%.6f,%.6f,%.6f,%u,%u,%.6f,%.6f,%.6f,%u,%u,%u,%.6f,%.6f,%s\n",
+    fprintf(file, "%s,%u,%s,%u,%s,%.6f,%u,%.6f,%.6f,%.6f,%u,%u,%u,%.6f,%.6f,%s,%u\n",
         src,
         ntohs(flow->src_port),
         dst,
         ntohs(flow->dst_port),
         ipProto2Name(flow->protocol),
-        first_time,
-        last_time,
         duration,
         flow->bytes,
-        flow->packets,
-        (double)(flow->d_ia_time/((double)flow->packets-1)),
+        (double)(flow->d_ia_time/((double)n_packets)),
         flow->min_ia_time,
         flow->max_ia_time,
-        flow->bytes/flow->packets,
+        flow->bytes/n_packets,
         flow->min_pkt_len,
         flow->max_pkt_len,
-        ((double)flow->packets/duration)*1000*1000,
+        ((double)n_packets/duration)*1000*1000,
         ((double)flow->bytes/duration)*1000*1000,
-        ndpi_get_proto_name(ndpi_struct, flow->detected_protocol)
+        app_name,
+        app_num             
     );
 
 }
@@ -438,7 +455,7 @@ static void printResults(void) {
     }    
     fprintf(flow_info_file,"\n");
 
-    fputs("source_ip,source_port,dest_ip,dest_port,IP4_proto,f_start,f_end,f_dur,delta_bytes,delta_packets,avg_ia,min_ia,max_ia,avg_len,min_len,max_len,pkt_vel,byte_vel,application\n", flow_info_file);
+    fputs("source_ip,source_port,dest_ip,dest_port,IP4_proto,f_dur,delta_bytes,avg_ia,min_ia,max_ia,avg_len,min_len,max_len,pkt_vel,byte_vel,application,app_num\n", flow_info_file);
     ndpi_twalk(ndpi_flows_root, node_output_flow_info_walker, NULL);
     fclose(flow_info_file);
     
@@ -459,7 +476,7 @@ static void node_output_flow_info_walker(const void *node, ndpi_VISIT which, int
 static void node_proto_guess_walker(const void *node, ndpi_VISIT which, int depth, void *user_data) {
     struct ndpi_flow *flow = *(struct ndpi_flow**)node;
     if((which == preorder) || (which == leaf)) { /* Avoid walking the same node multiple times */
-        if (flow->packets > 1 ) {
+        if (flow->packets >= n_packets ) {
             protocol_counter[flow->detected_protocol]       += flow->packets;
             protocol_counter_bytes[flow->detected_protocol] += flow->bytes;
             protocol_flows[flow->detected_protocol]++;    
@@ -490,7 +507,7 @@ int main(int argc, char *argv[]) {
     }
 
     if(argc == 4){
-        min_number_objects = *argv[3];
+        n_packets = atoi(argv[3]); //defaults to 10
     }        
 
    
